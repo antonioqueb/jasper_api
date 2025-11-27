@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  jasper-api:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - ODOO_URL=http://odoo:8069
+      - ODOO_DB=odoo_db
+      - ODOO_USERNAME=admin
+      - ODOO_PASSWORD=admin
+      - FLASK_DEBUG=False
+    restart: unless-stopped
