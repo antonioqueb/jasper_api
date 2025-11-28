@@ -1,300 +1,79 @@
 from odoo_client import odoo_client
 from config import Config
-import sys
 
 class CMSService:
     
     @staticmethod
-    def _fix_image_url(url):
+    def _fix_url(url):
         """
-        Convierte rutas relativas de Odoo en URLs absolutas PÚBLICAS.
-        Y corrige URLs internas (docker) a públicas (IP externa).
+        Convierte rutas relativas (/web/image...) en absolutas públicas.
         """
         if not url:
             return ""
 
-        # Obtenemos las bases limpias (sin slash al final)
-        # ODOO_PUBLIC_URL debe estar en config.py, si no usa ODOO_URL
         public_base = getattr(Config, 'ODOO_PUBLIC_URL', Config.ODOO_URL).rstrip('/')
-        internal_base = Config.ODOO_URL.rstrip('/')
-
+        
+        # Si ya tiene http, verificamos si es la URL interna y la cambiamos por la pública
         if url.startswith("http"):
-            # Si la URL ya es absoluta y contiene el host interno (ej. odoo19-dev),
-            # lo reemplazamos por el host público (ej. 46.202...)
-            if internal_base in url:
-                fixed_url = url.replace(internal_base, public_base)
-                return fixed_url
+            internal_base = Config.ODOO_URL.rstrip('/')
+            if internal_base in url and public_base != internal_base:
+                return url.replace(internal_base, public_base)
             return url
             
-        # Si es relativa (/web/image...), le pegamos el dominio PÚBLICO
+        # Si es relativa, pegamos el dominio público
         clean_path = url.lstrip('/')
         return f"{public_base}/{clean_path}"
 
     @staticmethod
-    def get_meta_by_url(page_url="/"):
-        """Obtener meta tags por URL de página"""
-        metas = odoo_client.search_read(
-            "jasper.cms.meta",
-            domain=[("page_url", "=", page_url), ("active", "=", True)],
-            fields=["meta_title", "meta_description", "meta_keywords"],
-            limit=1
-        )
-        if metas:
-            meta = metas[0]
-            return {
-                "title": meta.get("meta_title", ""),
-                "description": meta.get("meta_description", ""),
-                "keywords": meta.get("meta_keywords", "")
-            }
-        return {"title": "", "description": "", "keywords": ""}
-    
-    @staticmethod
-    def get_sections_by_page(page_url="/"):
-        """Obtener secciones de una página"""
-        pages = odoo_client.search_read(
-            "jasper.cms.meta",
-            domain=[("page_url", "=", page_url), ("active", "=", True)],
-            fields=["id"],
-            limit=1
-        )
-        
-        if not pages:
-            return []
-        
-        page_id = pages[0]["id"]
-        
-        sections = odoo_client.search_read(
-            "jasper.cms.section",
-            domain=[("page_id", "=", page_id), ("active", "=", True)],
-            fields=["section_id", "section_type", "layout", "content_id"],
-            order="sequence asc"
-        )
-        
-        result = []
-        for section in sections:
-            section_data = {
-                "id": section.get("section_id", ""),
-                "type": section.get("section_type", ""),
-                "layout": section.get("layout", ""),
-                "content": {}
-            }
-            
-            content_id = section.get("content_id")
-            if content_id and content_id[0]:
-                content = CMSService._get_section_content(content_id[0])
-                section_data["content"] = content
-            
-            result.append(section_data)
-        
-        return result
-    
-    @staticmethod
-    def _get_section_content(content_id):
-        """Obtener contenido de una sección"""
-        
-        # IMPORTANTE: Pedimos 'image' explícitamente a Odoo
-        contents = odoo_client.read(
-            "jasper.cms.section.content",
-            [content_id],
-            fields=[
-                "background_text", "badge_text", "badge_icon",
-                "subtitle", "title_normal", "title_highlight",
-                "description", "cta_text", "cta_sub_text", "cta_href",
-                "image_src", "image_alt", "show_badge", "image"
-            ]
-        )
-        
-        if not contents:
-            return {}
-        
-        c = contents[0]
-        result = {}
-        
-        # --- DEBUG PRINTS ---
-        print(f"\n[DEBUG] === Procesando Sección Content ID: {content_id} ===", flush=True)
-        # --------------------
-
-        if c.get("background_text"):
-            result["background_text"] = c["background_text"]
-        
-        if c.get("badge_text"):
-            result["badge"] = {
-                "text": c["badge_text"],
-                "icon": c.get("badge_icon") or "star"
-            }
-        
-        if c.get("subtitle"):
-            result["subtitle"] = c["subtitle"]
-        
-        if c.get("title_normal") or c.get("title_highlight"):
-            result["title"] = {
-                "normal": c.get("title_normal") or "",
-                "highlight": c.get("title_highlight") or ""
-            }
-        
-        if c.get("description"):
-            result["description"] = c["description"]
-        
-        if c.get("cta_text"):
-            result["cta"] = {
-                "text": c["cta_text"],
-                "href": c.get("cta_href") or "#"
-            }
-            if c.get("cta_sub_text"):
-                result["cta"]["sub_text"] = c["cta_sub_text"]
-        
-        # --- LÓGICA DE PRIORIDAD DE IMAGEN ---
-        final_src = ""
-        
-        # 1. Prioridad Máxima: ¿Existe una imagen binaria subida?
-        if c.get("image"):
-            # Generamos la URL dinámica apuntando a Odoo
-            raw_src = f"/web/image?model=jasper.cms.section.content&id={content_id}&field=image"
-            final_src = CMSService._fix_image_url(raw_src)
-            print(f"[DEBUG] -> Usando imagen BINARIA. URL Final: {final_src}", flush=True)
-            
-        # 2. Si no hay imagen subida, usamos el texto del XML
-        elif c.get("image_src"):
-             final_src = CMSService._fix_image_url(c["image_src"])
-             print(f"[DEBUG] -> Usando imagen TEXTO. URL Final: {final_src}", flush=True)
-             
-        else:
-             print("[DEBUG] -> No hay imagen", flush=True)
-
-        result["image"] = {
-            "src": final_src,
-            "alt": c.get("image_alt") or ""
-        }
-        
-        if c.get("show_badge"):
-            result["image"]["show_badge"] = True
-        
-        return result
-    
-    @staticmethod
-    def get_product_grid_by_page(page_url="/"):
-        """Obtener product grid de una página"""
-        pages = odoo_client.search_read(
-            "jasper.cms.meta",
-            domain=[("page_url", "=", page_url), ("active", "=", True)],
-            fields=["id"],
-            limit=1
-        )
-        
-        if not pages:
-            return None
-        
-        page_id = pages[0]["id"]
-        
-        grids = odoo_client.search_read(
-            "jasper.cms.product.grid",
-            domain=[("page_id", "=", page_id), ("active", "=", True)],
-            fields=["title", "max_items", "item_ids"],
-            order="sequence asc",
-            limit=1
-        )
-        
-        if not grids:
-            return None
-        
-        grid = grids[0]
-        items = CMSService._get_grid_items(grid.get("item_ids", []), grid.get("max_items", 8))
-        
-        return {
-            "title": grid.get("title", ""),
-            "items": items
-        }
-    
-    @staticmethod
-    def _get_grid_items(item_ids, max_items):
-        """Obtener items del product grid"""
-        if not item_ids:
-            return []
-        
-        # Pedimos 'manual_image' explícitamente
-        items = odoo_client.search_read(
-            "jasper.cms.product.grid.item",
-            domain=[("id", "in", item_ids), ("active", "=", True)],
-            fields=[
-                "product_id", "manual_name", "manual_slug", "manual_price",
-                "manual_currency", "manual_image_src", "manual_category",
-                "manual_image", "is_new", "is_featured"
-            ],
-            order="sequence asc",
-            limit=max_items
-        )
-        
-        result = []
-        for item in items:
-            product_id = item.get("product_id")
-            image_url = ""
-            
-            # --- LÓGICA DE PRIORIDAD GRID ---
-            
-            # A. Si hay producto vinculado
-            if product_id and product_id[0]:
-                products = odoo_client.read(
-                    "product.template",
-                    [product_id[0]],
-                    fields=["id", "name", "list_price", "categ_id"]
-                )
-                if products:
-                    p = products[0]
-                    
-                    # 1. Override manual binario
-                    if item.get("manual_image"):
-                        raw_src = f"/web/image?model=jasper.cms.product.grid.item&id={item['id']}&field=manual_image"
-                    # 2. Override manual texto
-                    elif item.get("manual_image_src"):
-                        raw_src = item["manual_image_src"]
-                    # 3. Imagen producto
-                    else:
-                        raw_src = f"/web/image/product.template/{p['id']}/image_1024"
-                    
-                    image_url = CMSService._fix_image_url(raw_src)
-
-                    result.append({
-                        "id": p["id"],
-                        "name": p["name"],
-                        "slug": item.get("manual_slug") or "",
-                        "price": p.get("list_price", 0),
-                        "currency": item.get("manual_currency") or "USD",
-                        "image": image_url,
-                        "category": p["categ_id"][1] if p.get("categ_id") else "",
-                        "is_new": item.get("is_new", False),
-                        "is_featured": item.get("is_featured", False)
-                    })
-            
-            # B. Si es item manual puro
-            else:
-                # 1. Imagen manual binaria
-                if item.get("manual_image"):
-                    raw_src = f"/web/image?model=jasper.cms.product.grid.item&id={item['id']}&field=manual_image"
-                # 2. Imagen manual texto
+    def _traverse_and_fix_images(data):
+        """
+        Recorre recursivamente el JSON (dict o list) buscando claves
+        'image', 'src' o 'meta_image' para arreglar las URLs.
+        """
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if key in ['src', 'image'] and isinstance(value, str):
+                    data[key] = CMSService._fix_url(value)
+                elif key == 'image' and isinstance(value, dict):
+                    # Caso: image: { src: "..." }
+                    CMSService._traverse_and_fix_images(value)
                 else:
-                    raw_src = item.get("manual_image_src") or ""
-                
-                image_url = CMSService._fix_image_url(raw_src)
+                    CMSService._traverse_and_fix_images(value)
+        elif isinstance(data, list):
+            for item in data:
+                CMSService._traverse_and_fix_images(item)
+        return data
 
-                result.append({
-                    "id": item["id"],
-                    "name": item.get("manual_name") or "",
-                    "slug": item.get("manual_slug") or "",
-                    "price": item.get("manual_price", 0),
-                    "currency": item.get("manual_currency") or "USD",
-                    "image": image_url,
-                    "category": item.get("manual_category") or "",
-                    "is_new": item.get("is_new", False),
-                    "is_featured": item.get("is_featured", False)
-                })
-        
-        return result
-    
     @staticmethod
-    def get_full_page_data(page_url="/"):
-        """Obtener todos los datos de una página"""
-        return {
-            "meta": CMSService.get_meta_by_url(page_url),
-            "sections": CMSService.get_sections_by_page(page_url),
-            "product_grid": CMSService.get_product_grid_by_page(page_url)
-        }
+    def get_home_content():
+        """
+        Obtiene la configuración del Home.
+        1. Busca el ID del registro jasper.home.
+        2. Llama al método 'get_home_data' de Odoo.
+        3. Procesa las URLs de las imágenes.
+        """
+        # 1. Buscar el registro único
+        records = odoo_client.search_read(
+            "jasper.home",
+            domain=[], # Trae todo (debería ser solo 1)
+            fields=['id'],
+            limit=1
+        )
+        
+        if not records:
+            raise Exception("No Home Page configuration found in Odoo.")
+            
+        home_id = records[0]['id']
+        
+        # 2. Llamar al método del modelo que ya estructura el JSON
+        # Esto nos evita duplicar la lógica de mapeo de campos aquí
+        raw_data = odoo_client.call_method(
+            "jasper.home",
+            "get_home_data",
+            ids=[home_id]
+        )
+        
+        # 3. Hidratar URLs (Odoo devuelve relativas, Flask las hace absolutas)
+        final_data = CMSService._traverse_and_fix_images(raw_data)
+        
+        return final_data

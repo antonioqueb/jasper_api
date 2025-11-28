@@ -20,14 +20,22 @@ class OdooClient:
             "params": params,
             "id": 1
         }
-        response = self.session.post(
-            f"{self.url}{endpoint}",
-            json=payload,
-            headers={"Content-Type": "application/json"}
-        )
-        result = response.json()
+        try:
+            response = self.session.post(
+                f"{self.url}{endpoint}",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=10
+            )
+            response.raise_for_status()
+            result = response.json()
+        except Exception as e:
+            raise Exception(f"Connection error to Odoo: {str(e)}")
+
         if "error" in result:
-            raise Exception(result["error"].get("data", {}).get("message", str(result["error"])))
+            err_msg = result["error"].get("data", {}).get("message", str(result["error"]))
+            raise Exception(f"Odoo RPC Error: {err_msg}")
+            
         return result.get("result")
     
     def authenticate(self):
@@ -43,7 +51,7 @@ class OdooClient:
         return self.uid
     
     def search_read(self, model, domain=None, fields=None, limit=None, order=None):
-        """Buscar y leer registros de un modelo"""
+        """Buscar y leer registros"""
         if not self.uid:
             self.authenticate()
         
@@ -62,34 +70,24 @@ class OdooClient:
             "kwargs": kwargs
         })
     
-    def read(self, model, ids, fields=None):
-        """Leer registros específicos por ID"""
-        if not self.uid:
-            self.authenticate()
-        
-        kwargs = {}
-        if fields:
-            kwargs["fields"] = fields
-        
-        return self._jsonrpc("/web/dataset/call_kw", {
-            "model": model,
-            "method": "read",
-            "args": [ids],
-            "kwargs": kwargs
-        })
-    
     def call_method(self, model, method, ids=None, args=None, kwargs=None):
-        """Llamar método personalizado de un modelo"""
+        """Llamar método personalizado del modelo"""
         if not self.uid:
             self.authenticate()
         
+        # args debe ser una lista. Si hay IDs, son el primer argumento.
+        rpc_args = []
+        if ids:
+            rpc_args.append(ids)
+        if args:
+            rpc_args.extend(args)
+
         return self._jsonrpc("/web/dataset/call_kw", {
             "model": model,
             "method": method,
-            "args": [ids] if ids else (args or []),
+            "args": rpc_args,
             "kwargs": kwargs or {}
         })
-
 
 # Singleton
 odoo_client = OdooClient()
