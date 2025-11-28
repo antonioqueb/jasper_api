@@ -81,6 +81,7 @@ class CMSService:
     @staticmethod
     def _get_section_content(content_id):
         """Obtener contenido de una sección"""
+        # CORRECCIÓN 1: Agregamos 'image' a los fields para saber si existe una subida manual
         contents = odoo_client.read(
             "jasper.cms.section.content",
             [content_id],
@@ -88,7 +89,7 @@ class CMSService:
                 "background_text", "badge_text", "badge_icon",
                 "subtitle", "title_normal", "title_highlight",
                 "description", "cta_text", "cta_sub_text", "cta_href",
-                "image_src", "image_alt", "show_badge"
+                "image_src", "image_alt", "show_badge", "image"
             ]
         )
         
@@ -127,15 +128,23 @@ class CMSService:
             if c.get("cta_sub_text"):
                 result["cta"]["sub_text"] = c["cta_sub_text"]
         
-        # LOGICA DE IMAGEN CORREGIDA
-        raw_src = c.get("image_src")
+        # --- LÓGICA DE PRIORIDAD DE IMAGEN ---
+        final_src = ""
         
-        # Si no hay texto en image_src, construimos la ruta al campo binario 'image'
-        if not raw_src:
+        # 1. Prioridad Máxima: ¿Existe una imagen binaria subida?
+        # En Odoo RPC, si el campo image tiene datos, devuelve el base64 (string largo) o binario.
+        # Si está vacío devuelve False.
+        if c.get("image"):
+            # Generamos la URL dinámica apuntando a Odoo
             raw_src = f"/web/image?model=jasper.cms.section.content&id={content_id}&field=image"
+            final_src = CMSService._fix_image_url(raw_src)
             
+        # 2. Si no hay imagen subida, usamos el texto (ej. /producto5.png)
+        elif c.get("image_src"):
+             final_src = CMSService._fix_image_url(c["image_src"])
+
         result["image"] = {
-            "src": CMSService._fix_image_url(raw_src),
+            "src": final_src,
             "alt": c.get("image_alt") or ""
         }
         
@@ -184,13 +193,14 @@ class CMSService:
         if not item_ids:
             return []
         
+        # CORRECCIÓN 2: Agregamos 'manual_image' a los fields
         items = odoo_client.search_read(
             "jasper.cms.product.grid.item",
             domain=[("id", "in", item_ids), ("active", "=", True)],
             fields=[
                 "product_id", "manual_name", "manual_slug", "manual_price",
                 "manual_currency", "manual_image_src", "manual_category",
-                "is_new", "is_featured"
+                "manual_image", "is_new", "is_featured"
             ],
             order="sequence asc",
             limit=max_items
@@ -199,10 +209,11 @@ class CMSService:
         result = []
         for item in items:
             product_id = item.get("product_id")
-            
-            # Inicializar variables
             image_url = ""
             
+            # --- LÓGICA DE PRIORIDAD GRID ---
+            
+            # A. Si hay producto vinculado
             if product_id and product_id[0]:
                 products = odoo_client.read(
                     "product.template",
@@ -212,9 +223,14 @@ class CMSService:
                 if products:
                     p = products[0]
                     
-                    # Determinar imagen del producto
-                    raw_src = item.get("manual_image_src")
-                    if not raw_src:
+                    # 1. ¿Hay imagen manual subida en el grid item? (Override)
+                    if item.get("manual_image"):
+                        raw_src = f"/web/image?model=jasper.cms.product.grid.item&id={item['id']}&field=manual_image"
+                    # 2. ¿Hay URL manual de texto?
+                    elif item.get("manual_image_src"):
+                        raw_src = item["manual_image_src"]
+                    # 3. Usar imagen por defecto del producto
+                    else:
                         raw_src = f"/web/image/product.template/{p['id']}/image_1024"
                     
                     image_url = CMSService._fix_image_url(raw_src)
@@ -230,11 +246,15 @@ class CMSService:
                         "is_new": item.get("is_new", False),
                         "is_featured": item.get("is_featured", False)
                     })
+            
+            # B. Si es item manual puro
             else:
-                # Determinar imagen manual
-                raw_src = item.get("manual_image_src")
-                if not raw_src:
+                # 1. ¿Hay imagen manual subida?
+                if item.get("manual_image"):
                     raw_src = f"/web/image?model=jasper.cms.product.grid.item&id={item['id']}&field=manual_image"
+                # 2. ¿Hay URL manual de texto?
+                else:
+                    raw_src = item.get("manual_image_src") or ""
                 
                 image_url = CMSService._fix_image_url(raw_src)
 
