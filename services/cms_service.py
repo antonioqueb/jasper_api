@@ -7,18 +7,28 @@ class CMSService:
     @staticmethod
     def _fix_image_url(url):
         """
-        Convierte rutas relativas de Odoo en URLs absolutas.
-        Ej: /web/image... -> http://midominio:8069/web/image...
+        Convierte rutas relativas de Odoo en URLs absolutas PÚBLICAS.
+        Y corrige URLs internas (docker) a públicas (IP externa).
         """
         if not url:
             return ""
+
+        # Obtenemos las bases limpias (sin slash al final)
+        # ODOO_PUBLIC_URL debe estar en config.py, si no usa ODOO_URL
+        public_base = getattr(Config, 'ODOO_PUBLIC_URL', Config.ODOO_URL).rstrip('/')
+        internal_base = Config.ODOO_URL.rstrip('/')
+
         if url.startswith("http"):
+            # Si la URL ya es absoluta y contiene el host interno (ej. odoo19-dev),
+            # lo reemplazamos por el host público (ej. 46.202...)
+            if internal_base in url:
+                fixed_url = url.replace(internal_base, public_base)
+                return fixed_url
             return url
-        # Elimina barra inicial si existe para evitar doble //
+            
+        # Si es relativa (/web/image...), le pegamos el dominio PÚBLICO
         clean_path = url.lstrip('/')
-        # Asegura que ODOO_URL no tenga barra final
-        base_url = Config.ODOO_URL.rstrip('/')
-        return f"{base_url}/{clean_path}"
+        return f"{public_base}/{clean_path}"
 
     @staticmethod
     def get_meta_by_url(page_url="/"):
@@ -100,15 +110,9 @@ class CMSService:
         c = contents[0]
         result = {}
         
-        # --- DEBUG PRINTS (Aparecerán en los logs de Docker) ---
+        # --- DEBUG PRINTS ---
         print(f"\n[DEBUG] === Procesando Sección Content ID: {content_id} ===", flush=True)
-        print(f"[DEBUG] Campo 'image' existe en respuesta Odoo? {'image' in c}", flush=True)
-        
-        # Odoo devuelve False si el binario está vacío, o un string base64 largo si hay imagen
-        has_binary_image = bool(c.get("image"))
-        print(f"[DEBUG] ¿Tiene imagen BINARIA subida? {has_binary_image}", flush=True)
-        print(f"[DEBUG] Valor de texto 'image_src': {c.get('image_src')}", flush=True)
-        # -------------------------------------------------------
+        # --------------------
 
         if c.get("background_text"):
             result["background_text"] = c["background_text"]
@@ -147,15 +151,15 @@ class CMSService:
             # Generamos la URL dinámica apuntando a Odoo
             raw_src = f"/web/image?model=jasper.cms.section.content&id={content_id}&field=image"
             final_src = CMSService._fix_image_url(raw_src)
-            print(f"[DEBUG] -> DECISIÓN: Usando imagen BINARIA generada: {final_src}", flush=True)
+            print(f"[DEBUG] -> Usando imagen BINARIA. URL Final: {final_src}", flush=True)
             
         # 2. Si no hay imagen subida, usamos el texto del XML
         elif c.get("image_src"):
              final_src = CMSService._fix_image_url(c["image_src"])
-             print(f"[DEBUG] -> DECISIÓN: Usando imagen TEXTO (XML/Default): {final_src}", flush=True)
+             print(f"[DEBUG] -> Usando imagen TEXTO. URL Final: {final_src}", flush=True)
              
         else:
-             print("[DEBUG] -> DECISIÓN: No hay imagen", flush=True)
+             print("[DEBUG] -> No hay imagen", flush=True)
 
         result["image"] = {
             "src": final_src,
@@ -224,10 +228,6 @@ class CMSService:
         for item in items:
             product_id = item.get("product_id")
             image_url = ""
-            
-            # Debug simple para items
-            has_manual_img = bool(item.get("manual_image"))
-            # print(f"[DEBUG] Grid Item {item['id']} tiene imagen manual? {has_manual_img}", flush=True)
             
             # --- LÓGICA DE PRIORIDAD GRID ---
             
