@@ -1,14 +1,13 @@
-version: '3.8'
-
 services:
-  jasper-api:
+  home-api:
     build: .
+    container_name: home-api
+    restart: always
     ports:
-      - "8010:5000"
+      - "8010:5000"  # Puerto Externo 8010 -> Interno 5000
+    env_file:
+      - .env         # <--- ESTA LÍNEA ES LA CLAVE
     environment:
-      - ODOO_URL=http://odoo:8069
-      - ODOO_DB=odoo_db
-      - ODOO_USERNAME=admin
-      - ODOO_PASSWORD=admin
-      - FLASK_DEBUG=False
-    restart: unless-stopped
+      # Aseguramos que Flask escuche en todas las interfaces dentro del contenedor
+      - FLASK_HOST=0.0.0.0
+      # Si tenías variables hardcodeadas aquí (ej: ODOO_URL=http://odoo:8069), BÓRRALAS.
