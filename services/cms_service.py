@@ -1,8 +1,25 @@
 from odoo_client import odoo_client
+from config import Config
 
 
 class CMSService:
     
+    @staticmethod
+    def _fix_image_url(url):
+        """
+        Convierte rutas relativas de Odoo en URLs absolutas.
+        Ej: /web/image... -> http://midominio:8069/web/image...
+        """
+        if not url:
+            return ""
+        if url.startswith("http"):
+            return url
+        # Elimina barra inicial si existe para evitar doble //
+        clean_path = url.lstrip('/')
+        # Asegura que ODOO_URL no tenga barra final
+        base_url = Config.ODOO_URL.rstrip('/')
+        return f"{base_url}/{clean_path}"
+
     @staticmethod
     def get_meta_by_url(page_url="/"):
         """Obtener meta tags por URL de página"""
@@ -110,13 +127,20 @@ class CMSService:
             if c.get("cta_sub_text"):
                 result["cta"]["sub_text"] = c["cta_sub_text"]
         
-        if c.get("image_src"):
-            result["image"] = {
-                "src": c["image_src"],
-                "alt": c.get("image_alt") or ""
-            }
-            if c.get("show_badge"):
-                result["image"]["show_badge"] = True
+        # LOGICA DE IMAGEN CORREGIDA
+        raw_src = c.get("image_src")
+        
+        # Si no hay texto en image_src, construimos la ruta al campo binario 'image'
+        if not raw_src:
+            raw_src = f"/web/image?model=jasper.cms.section.content&id={content_id}&field=image"
+            
+        result["image"] = {
+            "src": CMSService._fix_image_url(raw_src),
+            "alt": c.get("image_alt") or ""
+        }
+        
+        if c.get("show_badge"):
+            result["image"]["show_badge"] = True
         
         return result
     
@@ -176,6 +200,9 @@ class CMSService:
         for item in items:
             product_id = item.get("product_id")
             
+            # Inicializar variables
+            image_url = ""
+            
             if product_id and product_id[0]:
                 products = odoo_client.read(
                     "product.template",
@@ -184,25 +211,40 @@ class CMSService:
                 )
                 if products:
                     p = products[0]
+                    
+                    # Determinar imagen del producto
+                    raw_src = item.get("manual_image_src")
+                    if not raw_src:
+                        raw_src = f"/web/image/product.template/{p['id']}/image_1024"
+                    
+                    image_url = CMSService._fix_image_url(raw_src)
+
                     result.append({
                         "id": p["id"],
                         "name": p["name"],
                         "slug": item.get("manual_slug") or "",
                         "price": p.get("list_price", 0),
                         "currency": item.get("manual_currency") or "USD",
-                        "image": item.get("manual_image_src") or f"/web/image/product.template/{p['id']}/image_1024",
+                        "image": image_url,
                         "category": p["categ_id"][1] if p.get("categ_id") else "",
                         "is_new": item.get("is_new", False),
                         "is_featured": item.get("is_featured", False)
                     })
             else:
+                # Determinar imagen manual
+                raw_src = item.get("manual_image_src")
+                if not raw_src:
+                    raw_src = f"/web/image?model=jasper.cms.product.grid.item&id={item['id']}&field=manual_image"
+                
+                image_url = CMSService._fix_image_url(raw_src)
+
                 result.append({
                     "id": item["id"],
                     "name": item.get("manual_name") or "",
                     "slug": item.get("manual_slug") or "",
                     "price": item.get("manual_price", 0),
                     "currency": item.get("manual_currency") or "USD",
-                    "image": item.get("manual_image_src") or "",
+                    "image": image_url,
                     "category": item.get("manual_category") or "",
                     "is_new": item.get("is_new", False),
                     "is_featured": item.get("is_featured", False)
